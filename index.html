@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="theme-color" content="#111111" />
+<title>Track</title>
+<style>
+  :root{
+    font-family: -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",sans-serif;
+    color-scheme: dark;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;
+    min-height:100vh;
+    background:#0b0b0b;
+    color:#f4f4f4;
+    display:flex;
+    justify-content:center;
+  }
+  .wrap{
+    width:min(680px,100%);
+    padding:calc(22px + env(safe-area-inset-top)) 18px calc(28px + env(safe-area-inset-bottom));
+  }
+  h1{font-size:24px;margin:0 0 28px;font-weight:700}
+  .status{
+    text-align:center;
+    margin-top:34px;
+  }
+  .label{
+    font-size:14px;
+    opacity:.55;
+    text-transform:uppercase;
+    letter-spacing:.12em;
+  }
+  .time{
+    font-size:44px;
+    font-variant-numeric:tabular-nums;
+    margin:10px 0 4px;
+    font-weight:650;
+  }
+  .since{
+    opacity:.65;
+    min-height:22px;
+  }
+  button{
+    width:100%;
+    border:0;
+    border-radius:20px;
+    padding:20px 18px;
+    font-size:22px;
+    font-weight:700;
+    margin-top:30px;
+    background:#f2f2f2;
+    color:#111;
+  }
+  button.stop{background:#ff5a52;color:white}
+  .secondary{
+    background:#1c1c1e;
+    color:#f4f4f4;
+    font-size:16px;
+    padding:14px 16px;
+    margin-top:10px;
+  }
+  .row{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:10px;
+  }
+  .history{
+    margin-top:38px;
+  }
+  .history h2{
+    font-size:17px;
+    margin:0 0 12px;
+  }
+  .session{
+    background:#151515;
+    border-radius:16px;
+    padding:14px 15px;
+    margin-bottom:10px;
+  }
+  .session-top{
+    display:flex;
+    justify-content:space-between;
+    gap:12px;
+    align-items:baseline;
+  }
+  .range{font-variant-numeric:tabular-nums;font-weight:600}
+  .dur{opacity:.6;font-size:14px}
+  .date{font-size:13px;opacity:.45;margin-top:4px}
+  textarea{
+    width:100%;
+    margin-top:10px;
+    resize:vertical;
+    min-height:44px;
+    border:1px solid #2d2d2d;
+    background:#0f0f0f;
+    color:#f2f2f2;
+    border-radius:10px;
+    padding:10px;
+    font:inherit;
+  }
+  .mini{
+    width:auto;
+    display:inline-block;
+    padding:8px 10px;
+    border-radius:10px;
+    margin:8px 8px 0 0;
+    font-size:13px;
+    background:#252525;
+    color:#ddd;
+  }
+  .empty{opacity:.45;font-size:14px}
+  .footer{opacity:.4;font-size:12px;margin-top:24px;line-height:1.5}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Track</h1>
+
+  <div class="status">
+    <div class="label" id="statusLabel">READY</div>
+    <div class="time" id="timer">00:00:00</div>
+    <div class="since" id="since"></div>
+  </div>
+
+  <button id="mainBtn">START</button>
+
+  <div class="row">
+    <button class="secondary" id="csvBtn">Export CSV</button>
+    <button class="secondary" id="jsonBtn">Export JSON</button>
+  </div>
+
+  <div class="history">
+    <h2>Recent sessions</h2>
+    <div id="history"></div>
+  </div>
+
+  <div class="footer">
+    Data stays in this browser on this device until you export or clear it.
+    Notes are optional and can be added later.
+  </div>
+</div>
+
+<script>
+const KEY_SESSIONS = "track.sessions.v1";
+const KEY_CURRENT  = "track.current.v1";
+
+const mainBtn = document.getElementById("mainBtn");
+const timer = document.getElementById("timer");
+const statusLabel = document.getElementById("statusLabel");
+const since = document.getElementById("since");
+const historyEl = document.getElementById("history");
+
+let tickHandle = null;
+
+function loadSessions(){
+  try { return JSON.parse(localStorage.getItem(KEY_SESSIONS)) || []; }
+  catch { return []; }
+}
+function saveSessions(x){
+  localStorage.setItem(KEY_SESSIONS, JSON.stringify(x));
+}
+function getCurrent(){
+  const v = localStorage.getItem(KEY_CURRENT);
+  return v ? Number(v) : null;
+}
+function setCurrent(ms){
+  if(ms === null) localStorage.removeItem(KEY_CURRENT);
+  else localStorage.setItem(KEY_CURRENT, String(ms));
+}
+function pad(n){ return String(n).padStart(2,"0"); }
+function duration(ms){
+  const s = Math.max(0, Math.floor(ms/1000));
+  const h = Math.floor(s/3600);
+  const m = Math.floor((s%3600)/60);
+  const sec = s%60;
+  return `${pad(h)}:${pad(m)}:${pad(sec)}`;
+}
+function fmtTime(ms){
+  return new Date(ms).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
+}
+function fmtDate(ms){
+  return new Date(ms).toLocaleDateString([], {year:"numeric",month:"short",day:"numeric"});
+}
+function fmtISO(ms){ return new Date(ms).toISOString(); }
+
+function updateUI(){
+  const start = getCurrent();
+  if(start){
+    statusLabel.textContent = "TRACKING";
+    mainBtn.textContent = "STOP";
+    mainBtn.classList.add("stop");
+    since.textContent = `Started ${fmtTime(start)}`;
+    const update = ()=> timer.textContent = duration(Date.now()-start);
+    update();
+    clearInterval(tickHandle);
+    tickHandle = setInterval(update,1000);
+  } else {
+    statusLabel.textContent = "READY";
+    mainBtn.textContent = "START";
+    mainBtn.classList.remove("stop");
+    since.textContent = "";
+    timer.textContent = "00:00:00";
+    clearInterval(tickHandle);
+  }
+  renderHistory();
+}
+
+mainBtn.addEventListener("click", ()=>{
+  const start = getCurrent();
+  if(!start){
+    setCurrent(Date.now());
+  } else {
+    const end = Date.now();
+    const sessions = loadSessions();
+    sessions.unshift({
+      id: crypto.randomUUID ? crypto.randomUUID() : String(end),
+      start,
+      end,
+      note:""
+    });
+    saveSessions(sessions);
+    setCurrent(null);
+  }
+  updateUI();
+});
+
+function renderHistory(){
+  const sessions = loadSessions();
+  historyEl.innerHTML = "";
+  if(!sessions.length){
+    historyEl.innerHTML = `<div class="empty">No sessions yet.</div>`;
+    return;
+  }
+  sessions.slice(0,20).forEach(s=>{
+    const box = document.createElement("div");
+    box.className = "session";
+    const mins = Math.round((s.end-s.start)/60000);
+    box.innerHTML = `
+      <div class="session-top">
+        <div class="range">${fmtTime(s.start)}–${fmtTime(s.end)}</div>
+        <div class="dur">${mins} min</div>
+      </div>
+      <div class="date">${fmtDate(s.start)}</div>
+      <textarea placeholder="Optional note / what was this?" data-id="${s.id}">${escapeHTML(s.note||"")}</textarea>
+      <button class="mini save-note" data-id="${s.id}">Save note</button>
+      <button class="mini delete" data-id="${s.id}">Delete</button>
+    `;
+    historyEl.appendChild(box);
+  });
+
+  document.querySelectorAll(".save-note").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const id = btn.dataset.id;
+      const ta = document.querySelector(`textarea[data-id="${CSS.escape(id)}"]`);
+      const sessions = loadSessions();
+      const idx = sessions.findIndex(x=>x.id===id);
+      if(idx>=0){
+        sessions[idx].note = ta.value;
+        saveSessions(sessions);
+        btn.textContent = "Saved";
+        setTimeout(()=>btn.textContent="Save note",900);
+      }
+    });
+  });
+
+  document.querySelectorAll(".delete").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const id = btn.dataset.id;
+      const sessions = loadSessions().filter(x=>x.id!==id);
+      saveSessions(sessions);
+      renderHistory();
+    });
+  });
+}
+
+function escapeHTML(str){
+  return str.replace(/[&<>"']/g, c => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  }[c]));
+}
+
+function download(name, text, type){
+  const blob = new Blob([text], {type});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+}
+
+document.getElementById("jsonBtn").addEventListener("click", ()=>{
+  const out = {
+    exported_at: new Date().toISOString(),
+    current_start: getCurrent() ? fmtISO(getCurrent()) : null,
+    sessions: loadSessions().map(s=>({
+      start: fmtISO(s.start),
+      end: fmtISO(s.end),
+      duration_seconds: Math.round((s.end-s.start)/1000),
+      note: s.note || ""
+    }))
+  };
+  download(`track-${new Date().toISOString().slice(0,10)}.json`,
+           JSON.stringify(out,null,2),
+           "application/json");
+});
+
+document.getElementById("csvBtn").addEventListener("click", ()=>{
+  const rows = [["start","end","duration_seconds","note"]];
+  loadSessions().slice().reverse().forEach(s=>{
+    rows.push([
+      fmtISO(s.start),
+      fmtISO(s.end),
+      Math.round((s.end-s.start)/1000),
+      s.note || ""
+    ]);
+  });
+  const csv = rows.map(r=>r.map(v=>{
+    const x = String(v).replaceAll('"','""');
+    return `"${x}"`;
+  }).join(",")).join("\n");
+  download(`track-${new Date().toISOString().slice(0,10)}.csv`, csv, "text/csv");
+});
+
+updateUI();
+</script>
+</body>
+</html>
