@@ -5,12 +5,12 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<meta name="theme-color" content="#111111" />
+<meta name="theme-color" content="#0b0b0b" />
 <title>Track</title>
 <style>
   :root{
-    font-family: -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",sans-serif;
-    color-scheme: dark;
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",sans-serif;
+    color-scheme:dark;
   }
   *{box-sizing:border-box}
   body{
@@ -23,13 +23,10 @@
   }
   .wrap{
     width:min(680px,100%);
-    padding:calc(22px + env(safe-area-inset-top)) 18px calc(28px + env(safe-area-inset-bottom));
+    padding:calc(22px + env(safe-area-inset-top)) 18px calc(30px + env(safe-area-inset-bottom));
   }
   h1{font-size:24px;margin:0 0 28px;font-weight:700}
-  .status{
-    text-align:center;
-    margin-top:34px;
-  }
+  .status{text-align:center;margin-top:34px}
   .label{
     font-size:14px;
     opacity:.55;
@@ -42,10 +39,7 @@
     margin:10px 0 4px;
     font-weight:650;
   }
-  .since{
-    opacity:.65;
-    min-height:22px;
-  }
+  .since{opacity:.65;min-height:22px}
   button{
     width:100%;
     border:0;
@@ -61,8 +55,8 @@
   .secondary{
     background:#1c1c1e;
     color:#f4f4f4;
-    font-size:16px;
-    padding:14px 16px;
+    font-size:15px;
+    padding:13px 14px;
     margin-top:10px;
   }
   .row{
@@ -70,29 +64,75 @@
     grid-template-columns:1fr 1fr;
     gap:10px;
   }
-  .history{
-    margin-top:38px;
+  .note-card{
+    margin-top:26px;
+    background:#131313;
+    border-radius:18px;
+    padding:14px;
   }
-  .history h2{
-    font-size:17px;
-    margin:0 0 12px;
+  .note-card textarea{
+    width:100%;
+    border:0;
+    outline:0;
+    resize:vertical;
+    min-height:76px;
+    background:transparent;
+    color:#f4f4f4;
+    font:inherit;
+    line-height:1.45;
   }
-  .session{
-    background:#151515;
+  .note-card textarea::placeholder{color:#777}
+  .note-card button{
+    margin-top:10px;
+    padding:13px 14px;
+    border-radius:14px;
+    font-size:15px;
+  }
+
+  details{
+    margin-top:24px;
+    background:#101010;
     border-radius:16px;
-    padding:14px 15px;
-    margin-bottom:10px;
+    overflow:hidden;
   }
-  .session-top{
+  summary{
+    list-style:none;
+    cursor:pointer;
+    padding:15px 16px;
+    font-size:16px;
+    font-weight:650;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+  }
+  summary::-webkit-details-marker{display:none}
+  summary .count{opacity:.45;font-size:13px;font-weight:500}
+  .details-body{padding:0 14px 14px}
+  .session,.thought{
+    background:#171717;
+    border-radius:14px;
+    padding:13px 14px;
+    margin-top:10px;
+  }
+  .session-top,.thought-top{
     display:flex;
     justify-content:space-between;
     gap:12px;
     align-items:baseline;
   }
-  .range{font-variant-numeric:tabular-nums;font-weight:600}
+  .range,.thought-time{
+    font-variant-numeric:tabular-nums;
+    font-weight:600;
+  }
   .dur{opacity:.6;font-size:14px}
   .date{font-size:13px;opacity:.45;margin-top:4px}
-  textarea{
+  .thought-text{
+    margin-top:7px;
+    line-height:1.5;
+    white-space:pre-wrap;
+    word-break:break-word;
+  }
+  .session textarea{
     width:100%;
     margin-top:10px;
     resize:vertical;
@@ -114,7 +154,7 @@
     background:#252525;
     color:#ddd;
   }
-  .empty{opacity:.45;font-size:14px}
+  .empty{opacity:.45;font-size:14px;padding:8px 2px}
   .footer{opacity:.4;font-size:12px;margin-top:24px;line-height:1.5}
 </style>
 </head>
@@ -130,41 +170,69 @@
 
   <button id="mainBtn">START</button>
 
+  <div class="note-card">
+    <textarea id="thoughtInput" placeholder="碎碎念…"></textarea>
+    <button class="secondary" id="thoughtBtn">Save thought</button>
+  </div>
+
+  <details>
+    <summary>
+      <span>Today’s thoughts</span>
+      <span class="count" id="thoughtCount">0</span>
+    </summary>
+    <div class="details-body" id="thoughts"></div>
+  </details>
+
+  <details>
+    <summary>
+      <span>Recent sessions</span>
+      <span class="count" id="sessionCount">0</span>
+    </summary>
+    <div class="details-body" id="history"></div>
+  </details>
+
   <div class="row">
     <button class="secondary" id="csvBtn">Export CSV</button>
     <button class="secondary" id="jsonBtn">Export JSON</button>
   </div>
 
-  <div class="history">
-    <h2>Recent sessions</h2>
-    <div id="history"></div>
-  </div>
+  <button class="secondary" id="timelineBtn">Export Today Timeline</button>
 
   <div class="footer">
-    Data stays in this browser on this device until you export or clear it.
-    Notes are optional and can be added later.
+    Timer stays primary. Thoughts are timestamped automatically and can be added anytime.
+    Data is stored in this browser on this device until exported or cleared.
   </div>
 </div>
 
 <script>
 const KEY_SESSIONS = "track.sessions.v1";
 const KEY_CURRENT  = "track.current.v1";
+const KEY_THOUGHTS = "track.thoughts.v1";
 
 const mainBtn = document.getElementById("mainBtn");
 const timer = document.getElementById("timer");
 const statusLabel = document.getElementById("statusLabel");
 const since = document.getElementById("since");
 const historyEl = document.getElementById("history");
+const thoughtsEl = document.getElementById("thoughts");
+const thoughtInput = document.getElementById("thoughtInput");
+const thoughtCount = document.getElementById("thoughtCount");
+const sessionCount = document.getElementById("sessionCount");
 
 let tickHandle = null;
 
-function loadSessions(){
-  try { return JSON.parse(localStorage.getItem(KEY_SESSIONS)) || []; }
-  catch { return []; }
+function loadJSON(key, fallback=[]){
+  try { return JSON.parse(localStorage.getItem(key)) || fallback; }
+  catch { return fallback; }
 }
-function saveSessions(x){
-  localStorage.setItem(KEY_SESSIONS, JSON.stringify(x));
+function saveJSON(key, value){
+  localStorage.setItem(key, JSON.stringify(value));
 }
+function loadSessions(){ return loadJSON(KEY_SESSIONS, []); }
+function saveSessions(x){ saveJSON(KEY_SESSIONS, x); }
+function loadThoughts(){ return loadJSON(KEY_THOUGHTS, []); }
+function saveThoughts(x){ saveJSON(KEY_THOUGHTS, x); }
+
 function getCurrent(){
   const v = localStorage.getItem(KEY_CURRENT);
   return v ? Number(v) : null;
@@ -188,6 +256,11 @@ function fmtDate(ms){
   return new Date(ms).toLocaleDateString([], {year:"numeric",month:"short",day:"numeric"});
 }
 function fmtISO(ms){ return new Date(ms).toISOString(); }
+function dayKey(ms){
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
+function todayKey(){ return dayKey(Date.now()); }
 
 function updateUI(){
   const start = getCurrent();
@@ -209,6 +282,7 @@ function updateUI(){
     clearInterval(tickHandle);
   }
   renderHistory();
+  renderThoughts();
 }
 
 mainBtn.addEventListener("click", ()=>{
@@ -230,8 +304,53 @@ mainBtn.addEventListener("click", ()=>{
   updateUI();
 });
 
+document.getElementById("thoughtBtn").addEventListener("click", ()=>{
+  const text = thoughtInput.value.trim();
+  if(!text) return;
+  const thoughts = loadThoughts();
+  thoughts.unshift({
+    id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
+    time: Date.now(),
+    text
+  });
+  saveThoughts(thoughts);
+  thoughtInput.value = "";
+  renderThoughts();
+});
+
+function renderThoughts(){
+  const all = loadThoughts();
+  const todays = all.filter(t=>dayKey(t.time)===todayKey());
+  thoughtCount.textContent = `${todays.length} today`;
+  thoughtsEl.innerHTML = "";
+  if(!todays.length){
+    thoughtsEl.innerHTML = `<div class="empty">No thoughts today.</div>`;
+    return;
+  }
+  todays.forEach(t=>{
+    const box = document.createElement("div");
+    box.className = "thought";
+    box.innerHTML = `
+      <div class="thought-top">
+        <div class="thought-time">${fmtTime(t.time)}</div>
+        <div class="date">${fmtDate(t.time)}</div>
+      </div>
+      <div class="thought-text">${escapeHTML(t.text)}</div>
+      <button class="mini delete-thought" data-id="${t.id}">Delete</button>
+    `;
+    thoughtsEl.appendChild(box);
+  });
+  document.querySelectorAll(".delete-thought").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      saveThoughts(loadThoughts().filter(x=>x.id!==btn.dataset.id));
+      renderThoughts();
+    });
+  });
+}
+
 function renderHistory(){
   const sessions = loadSessions();
+  sessionCount.textContent = `${sessions.length}`;
   historyEl.innerHTML = "";
   if(!sessions.length){
     historyEl.innerHTML = `<div class="empty">No sessions yet.</div>`;
@@ -249,7 +368,7 @@ function renderHistory(){
       <div class="date">${fmtDate(s.start)}</div>
       <textarea placeholder="Optional note / what was this?" data-id="${s.id}">${escapeHTML(s.note||"")}</textarea>
       <button class="mini save-note" data-id="${s.id}">Save note</button>
-      <button class="mini delete" data-id="${s.id}">Delete</button>
+      <button class="mini delete-session" data-id="${s.id}">Delete</button>
     `;
     historyEl.appendChild(box);
   });
@@ -269,11 +388,9 @@ function renderHistory(){
     });
   });
 
-  document.querySelectorAll(".delete").forEach(btn=>{
+  document.querySelectorAll(".delete-session").forEach(btn=>{
     btn.addEventListener("click", ()=>{
-      const id = btn.dataset.id;
-      const sessions = loadSessions().filter(x=>x.id!==id);
-      saveSessions(sessions);
+      saveSessions(loadSessions().filter(x=>x.id!==btn.dataset.id));
       renderHistory();
     });
   });
@@ -284,7 +401,10 @@ function escapeHTML(str){
     "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
   }[c]));
 }
-
+function csvEscape(v){
+  const x = String(v ?? "").replaceAll('"','""');
+  return `"${x}"`;
+}
 function download(name, text, type){
   const blob = new Blob([text], {type});
   const url = URL.createObjectURL(blob);
@@ -306,28 +426,53 @@ document.getElementById("jsonBtn").addEventListener("click", ()=>{
       end: fmtISO(s.end),
       duration_seconds: Math.round((s.end-s.start)/1000),
       note: s.note || ""
+    })),
+    thoughts: loadThoughts().map(t=>({
+      timestamp: fmtISO(t.time),
+      text: t.text
     }))
   };
-  download(`track-${new Date().toISOString().slice(0,10)}.json`,
-           JSON.stringify(out,null,2),
-           "application/json");
+  download(`track-${todayKey()}.json`, JSON.stringify(out,null,2), "application/json");
 });
 
 document.getElementById("csvBtn").addEventListener("click", ()=>{
-  const rows = [["start","end","duration_seconds","note"]];
+  const rows = [["type","start","end","duration_seconds","timestamp","text_or_note"]];
   loadSessions().slice().reverse().forEach(s=>{
     rows.push([
-      fmtISO(s.start),
-      fmtISO(s.end),
-      Math.round((s.end-s.start)/1000),
-      s.note || ""
+      "session", fmtISO(s.start), fmtISO(s.end),
+      Math.round((s.end-s.start)/1000), "", s.note || ""
     ]);
   });
-  const csv = rows.map(r=>r.map(v=>{
-    const x = String(v).replaceAll('"','""');
-    return `"${x}"`;
-  }).join(",")).join("\n");
-  download(`track-${new Date().toISOString().slice(0,10)}.csv`, csv, "text/csv");
+  loadThoughts().slice().reverse().forEach(t=>{
+    rows.push(["thought","","","",fmtISO(t.time),t.text]);
+  });
+  const csv = rows.map(r=>r.map(csvEscape).join(",")).join("\n");
+  download(`track-${todayKey()}.csv`, csv, "text/csv");
+});
+
+document.getElementById("timelineBtn").addEventListener("click", ()=>{
+  const key = todayKey();
+  const items = [];
+  loadSessions().forEach(s=>{
+    if(dayKey(s.start)===key){
+      items.push({
+        sort:s.start,
+        line:`- ${fmtTime(s.start)}–${fmtTime(s.end)} · ${Math.round((s.end-s.start)/60000)} min${s.note ? ` · ${s.note}` : ""}`
+      });
+    }
+  });
+  loadThoughts().forEach(t=>{
+    if(dayKey(t.time)===key){
+      items.push({
+        sort:t.time,
+        line:`- ${fmtTime(t.time)} · 💭 ${t.text}`
+      });
+    }
+  });
+  items.sort((a,b)=>a.sort-b.sort);
+
+  const md = `# ${key}\n\n## Timeline\n\n${items.length ? items.map(x=>x.line).join("\n") : "_No entries yet._"}\n`;
+  download(`${key}-timeline.md`, md, "text/markdown");
 });
 
 updateUI();
