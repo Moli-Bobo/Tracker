@@ -185,7 +185,7 @@
 
   <details>
     <summary>
-      <span>Recent sessions</span>
+      <span>Today’s sessions</span>
       <span class="count" id="sessionCount">0</span>
     </summary>
     <div class="details-body" id="history"></div>
@@ -200,7 +200,8 @@
 
   <div class="footer">
     Timer stays primary. Thoughts are timestamped automatically and can be added anytime.
-    Data is stored in this browser on this device until exported or cleared.
+    Data is stored in this browser on this device. Entries older than 5 days are removed
+    automatically, so export before then.
   </div>
 </div>
 
@@ -208,6 +209,7 @@
 const KEY_SESSIONS = "track.sessions.v1";
 const KEY_CURRENT  = "track.current.v1";
 const KEY_THOUGHTS = "track.thoughts.v1";
+const RETENTION_DAYS = 5;
 
 const mainBtn = document.getElementById("mainBtn");
 const timer = document.getElementById("timer");
@@ -261,6 +263,25 @@ function dayKey(ms){
   return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
 }
 function todayKey(){ return dayKey(Date.now()); }
+
+/** Local midnight at the start of the oldest day we keep. */
+function retentionCutoff(){
+  const d = new Date();
+  d.setHours(0,0,0,0);
+  d.setDate(d.getDate()-(RETENTION_DAYS-1));
+  return d.getTime();
+}
+
+/** Drop entries outside the retention window. Export before a day falls out; nothing else keeps it. */
+function pruneOldEntries(){
+  const cutoff = retentionCutoff();
+  const sessions = loadSessions();
+  const keptSessions = sessions.filter(s=>s.start>=cutoff);
+  if(keptSessions.length !== sessions.length) saveSessions(keptSessions);
+  const thoughts = loadThoughts();
+  const keptThoughts = thoughts.filter(t=>t.time>=cutoff);
+  if(keptThoughts.length !== thoughts.length) saveThoughts(keptThoughts);
+}
 
 function updateUI(){
   const start = getCurrent();
@@ -349,14 +370,14 @@ function renderThoughts(){
 }
 
 function renderHistory(){
-  const sessions = loadSessions();
-  sessionCount.textContent = `${sessions.length}`;
+  const todays = loadSessions().filter(s=>dayKey(s.start)===todayKey());
+  sessionCount.textContent = `${todays.length} today`;
   historyEl.innerHTML = "";
-  if(!sessions.length){
-    historyEl.innerHTML = `<div class="empty">No sessions yet.</div>`;
+  if(!todays.length){
+    historyEl.innerHTML = `<div class="empty">No sessions today.</div>`;
     return;
   }
-  sessions.slice(0,20).forEach(s=>{
+  todays.forEach(s=>{
     const box = document.createElement("div");
     box.className = "session";
     const mins = Math.round((s.end-s.start)/60000);
@@ -475,6 +496,7 @@ document.getElementById("timelineBtn").addEventListener("click", ()=>{
   download(`${key}-timeline.md`, md, "text/markdown");
 });
 
+pruneOldEntries();
 updateUI();
 </script>
 </body>
