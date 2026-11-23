@@ -154,6 +154,17 @@
     background:#252525;
     color:#ddd;
   }
+  .photo-row{margin-top:0}
+  .photo-row button{margin-top:8px}
+  .thought-photo{
+    display:block;
+    margin-top:9px;
+    max-width:100%;
+    max-height:180px;
+    border-radius:10px;
+    background:#0f0f0f;
+  }
+  .photo-missing{margin-top:7px;opacity:.5;font-size:14px;font-style:italic}
   .empty{opacity:.45;font-size:14px;padding:8px 2px}
   .footer{opacity:.4;font-size:12px;margin-top:24px;line-height:1.5}
 </style>
@@ -173,6 +184,12 @@
   <div class="note-card">
     <textarea id="thoughtInput" placeholder="碎碎念…"></textarea>
     <button class="secondary" id="thoughtBtn">Save thought</button>
+    <div class="row photo-row">
+      <button class="secondary" id="cameraBtn">📷 Camera</button>
+      <button class="secondary" id="albumBtn">🖼 Album</button>
+    </div>
+    <input type="file" accept="image/*" capture="environment" id="cameraInput" hidden />
+    <input type="file" accept="image/*" id="albumInput" hidden />
   </div>
 
   <details>
@@ -200,6 +217,7 @@
 
   <div class="footer">
     Timer stays primary. Thoughts are timestamped automatically and can be added anytime.
+    A photo is saved as a thought, with any text in the box as its caption, and is kept small.
     Data is stored in this browser on this device. Entries older than 5 days are removed
     automatically, so export before then.
   </div>
@@ -210,6 +228,13 @@ const KEY_SESSIONS = "track.sessions.v1";
 const KEY_CURRENT  = "track.current.v1";
 const KEY_THOUGHTS = "track.thoughts.v1";
 const RETENTION_DAYS = 5;
+/** Photos are shrunk so their longer side is at most this many pixels, then saved as JPEG. */
+const PHOTO_MAX_EDGE = 480;
+const PHOTO_QUALITY = 0.6;
+/** Photos live in IndexedDB, so they never fill up the small localStorage that holds the text. */
+const PHOTO_DB = "track-photos";
+const PHOTO_STORE = "photos";
+const PHOTO_TYPE = "image/jpeg";
 
 const mainBtn = document.getElementById("mainBtn");
 const timer = document.getElementById("timer");
@@ -234,6 +259,62 @@ function loadSessions(){ return loadJSON(KEY_SESSIONS, []); }
 function saveSessions(x){ saveJSON(KEY_SESSIONS, x); }
 function loadThoughts(){ return loadJSON(KEY_THOUGHTS, []); }
 function saveThoughts(x){ saveJSON(KEY_THOUGHTS, x); }
+
+function newId(){ return crypto.randomUUID ? crypto.randomUUID() : String(Date.now()); }
+
+/* ---------- Photo storage (IndexedDB, keyed by thought id) ---------- */
+let photoDbPromise = null;
+function photoDb(){
+  if(!photoDbPromise){
+    photoDbPromise = new Promise((resolve, reject)=>{
+      const req = indexedDB.open(PHOTO_DB, 1);
+      req.onupgradeneeded = ()=> req.result.createObjectStore(PHOTO_STORE);
+      req.onsuccess = ()=> resolve(req.result);
+      req.onerror = ()=> reject(req.error);
+    });
+    photoDbPromise.catch(()=>{ photoDbPromise = null; });
+  }
+  return photoDbPromise;
+}
+async function photoRequest(mode, run){
+  const db = await photoDb();
+  return new Promise((resolve, reject)=>{
+    const tx = db.transaction(PHOTO_STORE, mode);
+    const req = run(tx.objectStore(PHOTO_STORE));
+    tx.oncomplete = ()=> resolve(req.result);
+    tx.onerror = ()=> reject(tx.error);
+    tx.onabort = ()=> reject(tx.error);
+  });
+}
+// Bytes, not Blobs: older Safari versions were unreliable at keeping Blobs in IndexedDB.
+const putPhoto = (id, bytes)=> photoRequest("readwrite", store=>store.put(bytes, id));
+const getPhoto = id=> photoRequest("readonly", store=>store.get(id));
+const deletePhoto = id=> photoRequest("readwrite", store=>store.delete(id));
+const photoKeys = ()=> photoRequest("readonly", store=>store.getAllKeys());
+const photoBlob = bytes=> new Blob([bytes], {type: PHOTO_TYPE});
+
+/** Decode any image the phone hands over and redraw it small as a JPEG; this also drops its location data. */
+async function shrinkPhoto(file){
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    const scale = Math.min(1, PHOTO_MAX_EDGE / Math.max(img.naturalWidth, img.naturalHeight));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff"; // JPEG has no transparency
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise(resolve=>canvas.toBlob(resolve, PHOTO_TYPE, PHOTO_QUALITY));
+    if(!blob) throw new Error("the photo could not be converted");
+    return blob;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
 
 function getCurrent(){
   const v = localStorage.getItem(KEY_CURRENT);
@@ -281,6 +362,20 @@ function pruneOldEntries(){
   const thoughts = loadThoughts();
   const keptThoughts = thoughts.filter(t=>t.time>=cutoff);
   if(keptThoughts.length !== thoughts.length) saveThoughts(keptThoughts);
+  photoTidying = prunePhotos(keptThoughts);
+}
+/** Finishes once the load-time photo cleanup is done; new photos wait for it so it can never remove them. */
+let photoTidying = Promise.resolve();
+
+/** Remove stored photos that no kept thought uses any more (expired or deleted). */
+async function prunePhotos(thoughts){
+  const used = new Set(thoughts.filter(t=>t.photo).map(t=>t.id));
+  try {
+    const keys = await photoKeys();
+    await Promise.all(keys.filter(key=>!used.has(key)).map(deletePhoto));
+  } catch(err) {
+    console.warn("Track: could not tidy old photos", err);
+  }
 }
 
 function updateUI(){
@@ -314,7 +409,7 @@ mainBtn.addEventListener("click", ()=>{
     const end = Date.now();
     const sessions = loadSessions();
     sessions.unshift({
-      id: crypto.randomUUID ? crypto.randomUUID() : String(end),
+      id: newId(),
       start,
       end,
       note:""
@@ -330,7 +425,7 @@ document.getElementById("thoughtBtn").addEventListener("click", ()=>{
   if(!text) return;
   const thoughts = loadThoughts();
   thoughts.unshift({
-    id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
+    id: newId(),
     time: Date.now(),
     text
   });
@@ -339,10 +434,79 @@ document.getElementById("thoughtBtn").addEventListener("click", ()=>{
   renderThoughts();
 });
 
+const cameraBtn = document.getElementById("cameraBtn");
+const albumBtn = document.getElementById("albumBtn");
+const cameraInput = document.getElementById("cameraInput");
+const albumInput = document.getElementById("albumInput");
+cameraBtn.addEventListener("click", ()=>cameraInput.click());
+albumBtn.addEventListener("click", ()=>albumInput.click());
+cameraInput.addEventListener("change", ()=>addPhoto(cameraInput));
+albumInput.addEventListener("change", ()=>addPhoto(albumInput));
+
+function setPhotoBusy(isBusy){
+  cameraBtn.disabled = isBusy;
+  albumBtn.disabled = isBusy;
+  cameraBtn.textContent = isBusy ? "Saving photo…" : "📷 Camera";
+}
+
+/** Save the chosen photo as a thought at the moment it is added; text in the box becomes its caption. */
+async function addPhoto(input){
+  const file = input.files && input.files[0];
+  input.value = ""; // so choosing the same photo again still fires
+  if(!file) return;
+  const time = Date.now();
+  const id = newId();
+  setPhotoBusy(true);
+  let isStored = false;
+  try {
+    await photoTidying;
+    const blob = await shrinkPhoto(file);
+    await putPhoto(id, await blob.arrayBuffer());
+    isStored = true;
+    const thoughts = loadThoughts();
+    thoughts.unshift({id, time, text: thoughtInput.value.trim(), photo: true});
+    saveThoughts(thoughts);
+    thoughtInput.value = "";
+    if(navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(()=>{});
+    renderThoughts();
+  } catch(err) {
+    console.error("Track: photo not saved", err);
+    if(isStored) deletePhoto(id).catch(e=>console.warn("Track: could not remove unsaved photo", e));
+    alert(`The photo was not saved (${err && err.message ? err.message : err}). Your text is still in the box.`);
+  } finally {
+    setPhotoBusy(false);
+  }
+}
+
+let photoUrls = [];
+let renderRound = 0;
+function showPhoto(box, t, round){
+  const img = document.createElement("img");
+  img.className = "thought-photo";
+  img.alt = `Photo at ${fmtTime(t.time)}`;
+  box.querySelector(".thought-top").after(img);
+  getPhoto(t.id).then(bytes=>{
+    if(!bytes){ throw new Error("missing"); }
+    const url = URL.createObjectURL(photoBlob(bytes));
+    if(round !== renderRound){ URL.revokeObjectURL(url); return; }
+    photoUrls.push(url);
+    img.src = url;
+  }).catch(err=>{
+    if(err.message !== "missing") console.warn("Track: could not show photo", err);
+    const note = document.createElement("div");
+    note.className = "photo-missing";
+    note.textContent = "Photo missing";
+    img.replaceWith(note);
+  });
+}
+
 function renderThoughts(){
   const all = loadThoughts();
   const todays = all.filter(t=>dayKey(t.time)===todayKey());
   thoughtCount.textContent = `${todays.length} today`;
+  photoUrls.forEach(url=>URL.revokeObjectURL(url));
+  photoUrls = [];
+  const round = ++renderRound;
   thoughtsEl.innerHTML = "";
   if(!todays.length){
     thoughtsEl.innerHTML = `<div class="empty">No thoughts today.</div>`;
@@ -356,14 +520,18 @@ function renderThoughts(){
         <div class="thought-time">${fmtTime(t.time)}</div>
         <div class="date">${fmtDate(t.time)}</div>
       </div>
-      <div class="thought-text">${escapeHTML(t.text)}</div>
+      ${t.text ? `<div class="thought-text">${escapeHTML(t.text)}</div>` : ""}
       <button class="mini delete-thought" data-id="${t.id}">Delete</button>
     `;
+    if(t.photo) showPhoto(box, t, round);
     thoughtsEl.appendChild(box);
   });
   document.querySelectorAll(".delete-thought").forEach(btn=>{
     btn.addEventListener("click", ()=>{
-      saveThoughts(loadThoughts().filter(x=>x.id!==btn.dataset.id));
+      const id = btn.dataset.id;
+      const removed = loadThoughts().find(x=>x.id===id);
+      saveThoughts(loadThoughts().filter(x=>x.id!==id));
+      if(removed && removed.photo) deletePhoto(id).catch(err=>console.warn("Track: could not delete photo", err));
       renderThoughts();
     });
   });
@@ -438,7 +606,34 @@ function download(name, text, type){
   setTimeout(()=>URL.revokeObjectURL(url), 1000);
 }
 
-document.getElementById("jsonBtn").addEventListener("click", ()=>{
+function readAsDataURL(blob){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onload = ()=> resolve(reader.result);
+    reader.onerror = ()=> reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+/** A thought as exported; a photo travels inside the JSON as a data URL, so one file holds everything. */
+async function exportThought(t){
+  const base = {timestamp: fmtISO(t.time), text: t.text};
+  if(!t.photo) return {thought: base, isMissing: false};
+  const bytes = await getPhoto(t.id);
+  if(!bytes) return {thought: {...base, text: t.text || "(photo missing)"}, isMissing: true};
+  return {thought: {...base, photo: await readAsDataURL(photoBlob(bytes))}, isMissing: false};
+}
+
+document.getElementById("jsonBtn").addEventListener("click", async ()=>{
+  const thoughts = loadThoughts();
+  let exported;
+  try {
+    exported = await Promise.all(thoughts.map(exportThought));
+  } catch(err) {
+    console.error("Track: export failed", err);
+    alert(`Export failed while reading photos (${err && err.message ? err.message : err}). Nothing was downloaded.`);
+    return;
+  }
   const out = {
     exported_at: new Date().toISOString(),
     current_start: getCurrent() ? fmtISO(getCurrent()) : null,
@@ -448,13 +643,14 @@ document.getElementById("jsonBtn").addEventListener("click", ()=>{
       duration_seconds: Math.round((s.end-s.start)/1000),
       note: s.note || ""
     })),
-    thoughts: loadThoughts().map(t=>({
-      timestamp: fmtISO(t.time),
-      text: t.text
-    }))
+    thoughts: exported.map(x=>x.thought)
   };
   download(`track-${todayKey()}.json`, JSON.stringify(out,null,2), "application/json");
+  const missing = exported.filter(x=>x.isMissing).length;
+  if(missing) alert(`${missing} photo${missing===1?" was":"s were"} missing on this phone and left out of the export.`);
 });
+
+const thoughtLabel = t=> t.photo ? `📷 ${t.text}`.trim() : t.text;
 
 document.getElementById("csvBtn").addEventListener("click", ()=>{
   const rows = [["type","start","end","duration_seconds","timestamp","text_or_note"]];
@@ -465,7 +661,7 @@ document.getElementById("csvBtn").addEventListener("click", ()=>{
     ]);
   });
   loadThoughts().slice().reverse().forEach(t=>{
-    rows.push(["thought","","","",fmtISO(t.time),t.text]);
+    rows.push(["thought","","","",fmtISO(t.time),thoughtLabel(t)]);
   });
   const csv = rows.map(r=>r.map(csvEscape).join(",")).join("\n");
   download(`track-${todayKey()}.csv`, csv, "text/csv");
@@ -486,7 +682,7 @@ document.getElementById("timelineBtn").addEventListener("click", ()=>{
     if(dayKey(t.time)===key){
       items.push({
         sort:t.time,
-        line:`- ${fmtTime(t.time)} · 💭 ${t.text}`
+        line:`- ${fmtTime(t.time)} · 💭 ${thoughtLabel(t)}`
       });
     }
   });
